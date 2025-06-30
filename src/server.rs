@@ -1,9 +1,12 @@
+use anyhow::Result;
 use log;
+use thiserror::Error;
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read};
 use std::net::{TcpListener, TcpStream};
 
-#[derive(Debug)]
+use crate::parser::Parser;
+
 pub struct Server {
     pub addr: String,
     pub listener: TcpListener,
@@ -24,34 +27,48 @@ impl Server {
         log::info!("Starting server {}", self.addr);
         for stream in self.listener.incoming() {
             match stream {
-                Ok(stream) => self.handle_stream(stream),
+                Ok(stream) => {
+                    if let Err(e) = self.handle_stream(stream) {
+                        log::error!("stream handling failed: {}", e);
+                        break;
+                    }
+                }
                 Err(e) => {
-                    log::error!("error connecting {}", e)
+                    log::error!("error connecting {}", e);
                 }
             }
         }
+        log::debug!("finished run loop");
     }
 
-    fn handle_stream(&self, stream: TcpStream) {
+    fn handle_stream(&self, stream: TcpStream) -> Result<()> {
         let peer_addr = stream.peer_addr().unwrap();
         log::info!("incoming connection {}", peer_addr);
 
-        let mut reader = BufReader::new(&stream);
-        let mut writer = &stream;
+        let reader = BufReader::new(&stream);
+        //let mut writer = &stream;
 
-        let mut line = String::new();
-        while let Ok(bytes_read) = reader.read_line(&mut line) {
-            if bytes_read == 0 {
-                break; // connection closed
+        let mut parser = Parser::new(reader);
+        loop {
+            let cmd = parser.parse()?;
+            match cmd {
+                Some(cmd) => {
+                    log::info!("received command: {:?}", cmd);
+                }
+                None => {
+                    break;
+                }
             }
-
-            print!("Received: {}", line); // print on server
-            if let Err(e) = writer.write(line.as_bytes()) {
-                eprintln!("Failed to write: {}", e);
-                break;
-            }
-
-            line.clear(); // reset buffer for next line
         }
+        Ok(())
     }
+}
+
+#[derive(Debug, Error)]
+pub enum ServerError {
+    #[error("network error: {0}")]
+    Network(#[from] std::io::Error),
+
+    #[error("protocol error: {0}")]
+    Protocol(String),
 }
