@@ -1,6 +1,5 @@
 use anyhow::Result;
 use log;
-use thiserror::Error;
 
 use std::io::{BufRead, BufReader, Read};
 use std::net::{TcpListener, TcpStream};
@@ -62,13 +61,4 @@ impl Server {
         }
         Ok(())
     }
-}
-
-#[derive(Debug, Error)]
-pub enum ServerError {
-    #[error("network error: {0}")]
-    Network(#[from] std::io::Error),
-
-    #[error("protocol error: {0}")]
-    Protocol(String),
 }

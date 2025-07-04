@@ -1,7 +1,7 @@
 .PHONY=watch,watch-test
 
 watch:
-	cargo watch -c -x run
+	watchexec -e rs -c -r -- cargo run
 
 watch-test:
-	cargo watch -x test
+	watchexec -e rs -c -r -- cargo test
