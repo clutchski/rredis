@@ -19,7 +19,6 @@ jobs:
     - name: Install mise and tools
       uses: jdx/mise-action@v2
       with:
-        version: latest
         install: true
     
     - name: Cache cargo registry
