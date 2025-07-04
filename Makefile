@@ -1,4 +1,4 @@
-.PHONY: build test fmt fmt-check ci watch watch-test bench check clean run release
+.PHONY: build test fmt fmt-check ci watch watch-test bench check clean run release lint
 
 build:
 	cargo build
@@ -15,6 +15,9 @@ fmt-check:
 check:
 	cargo check
 
+lint:
+	cargo clippy
+
 bench:
 	cargo bench
 
@@ -27,7 +30,7 @@ run:
 release:
 	cargo build --release
 
-ci: fmt-check test build
+ci: fmt-check lint test build
 
 watch:
 	watchexec -e rs -c -r -- cargo run
