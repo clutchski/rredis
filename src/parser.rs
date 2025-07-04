@@ -110,6 +110,7 @@ pub fn parse_simple_string(buf: &mut BytesMut) -> Result<String> {
     Err(anyhow::anyhow!("Incomplete simple string"))
 }
 
+// Parses a redis integer (e.g. ":-123\r\n")
 pub fn parse_integer(buf: &mut BytesMut) -> Result<i64> {
     if buf.len() < 4 || buf[0] != b':' {
         return Err(anyhow::anyhow!("Invalid integer prefix"));
@@ -148,6 +149,8 @@ mod tests {
             assert_eq!(result, *expected, "input: {:?}", input);
             assert!(buf.is_empty());
         }
+
+        let mut double = BytesMut::from(":1\r\n:10\r\n:100\r\n");
     }
 
     #[test]

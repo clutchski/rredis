@@ -1,6 +1,6 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use rredis::parser::parse_simple_string;
 use bytes::BytesMut;
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use rredis::parser::parse_simple_string;
 
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("parse_simple_string", |b| {

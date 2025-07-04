@@ -1,5 +1,5 @@
-mod server;
 mod parser;
+mod server;
 
 use log;
 use server::Server;
