@@ -1,6 +1,5 @@
 use anyhow::{Result, anyhow};
 use bytes::{Buf, BufMut, Bytes, BytesMut, buf};
-use log;
 use std::io::{BufRead, BufReader, Read};
 
 pub const CRLF: &[u8] = b"\r\n";
@@ -19,103 +18,83 @@ impl<R: Read> Parser<R> {
         };
     }
 
-    pub fn parse(&mut self) -> Result<Option<Command>> {
+    pub fn parse(&mut self) -> Result<Option<Arg>> {
         self.buf.clear();
 
-        // first is to read how many commands we expect to read in the form of
-        // *X\r\n where x is an arbitrary number of digits
-        let bytes_read = self.reader.read_until(b'\n', &mut self.buf)?;
-        log::info!("raw command {}", String::from_utf8_lossy(&mut self.buf));
-
-        // EOF
-        if bytes_read == 0 {
-            return Ok(None); // EOF
-        } else if bytes_read < 4 {
-            return Err(anyhow!("command too short"));
-        } else if bytes_read != self.buf.len() {
-            return Err(anyhow!(
-                "expected {} bytes got {}",
-                self.buf.len(),
-                bytes_read
-            ));
-        }
-
-        if &self.buf[bytes_read - 2..] != b"\r\n" {
-            return Err(anyhow!(
-                "expected last two bytes to be '\r\n' got {:?}",
-                &self.buf[bytes_read - 2..]
-            ));
-        } else if self.buf[0] != b'*' {
-            return Err(anyhow!(
-                "expected '*' got byte 0x{:02X}('{}')",
-                self.buf[0],
-                self.buf[0] as char
-            ));
-        }
-
-        let num_str = std::str::from_utf8(&self.buf[1..bytes_read - 2])?;
-        let num: u32 = num_str.parse()?;
-        if num == 0 {
-            return Err(anyhow!("recevied command array of 0"));
-        }
-
-        for _ in 0..num {
-            self.buf.clear();
-            let _bytes_read = self.reader.read_until(b'\n', &mut self.buf)?;
-            log::info!("sub command {}", String::from_utf8_lossy(&mut self.buf));
-        }
-
-        let cmd = Command {
-            name: CommandNames::Fake,
-            args: vec![],
-        };
-
-        return Ok(Some(cmd));
+        return Err(anyhow::anyhow!("can't parse empty arg"));
     }
 }
 
-#[derive(Debug, PartialEq)]
-pub enum ParseError {
-    InvalidInputError,
-}
-
 #[derive(Debug, PartialEq, Eq)]
-pub enum CommandNames {
+pub enum CommandName {
     Fake,
     Ping,
 }
 
 #[derive(Debug)]
 pub struct Command {
-    pub name: CommandNames,
-    pub args: Vec<String>,
+    pub name: CommandName,
+    pub args: Vec<Arg>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum Arg {
+    String(String),
+    Bytes(Bytes),
+    Int(i64),
+    Array(Vec<Arg>),
+}
+
+pub fn parse_arg(buf: &mut BytesMut) -> Result<Arg> {
+    if buf.is_empty() {
+        return Err(anyhow::anyhow!("can't parse empty arg"));
+    }
+
+    let peek = buf[0];
+
+    match peek {
+        b':' => {
+            let i = parse_integer(buf)?;
+            return Ok(Arg::Int(i));
+        }
+        b'+' => {
+            let s = parse_simple_string(buf)?;
+            return Ok(Arg::String(s));
+        }
+        b'$' => {
+            let b = parse_bulk_string(buf)?;
+            return Ok(Arg::Bytes(b));
+        }
+        b'*' => return Ok(parse_array(buf)?),
+        _ => return Err(anyhow!("Invalid arg prefix")),
+    }
 }
 
 // Parses the next redis simple string (e.g. +FOOBAR\r\n) in the buffer
 // and advance buf's cursor to the next valid position.
 pub fn parse_simple_string(buf: &mut BytesMut) -> Result<String> {
     if buf.is_empty() || buf[0] != b'+' {
-        return Err(anyhow::anyhow!("Invalid simple string format"));
+        return Err(anyhow!("Invalid simple string format"));
     }
 
     for i in 1..buf.len() - 1 {
         if buf[i..].starts_with(CRLF) {
             let simple_string = std::str::from_utf8(&buf[1..i])
-                .map_err(|_| anyhow::anyhow!("Invalid UTF-8 in simple string"))?
+                .map_err(|_| anyhow!("Invalid UTF-8 in simple string"))?
                 .to_string();
             buf.advance(i + 2);
             return Ok(simple_string);
         }
     }
 
-    Err(anyhow::anyhow!("Incomplete simple string"))
+    Err(anyhow!("Incomplete simple string"))
 }
 
 // Parses a redis integer (e.g. ":-123\r\n") from buf and advance
 // buf's cursor to the next valid position.
 pub fn parse_integer(buf: &mut BytesMut) -> Result<i64> {
     if buf.len() < 4 || buf[0] != b':' {
-        return Err(anyhow::anyhow!("Invalid integer prefix"));
+        return Err(anyhow!("Invalid integer prefix"));
     }
     for i in 1..buf.len() - 1 {
         if buf[i..].starts_with(CRLF) {
@@ -144,12 +123,12 @@ pub fn parse_bulk_string(buf: &mut BytesMut) -> Result<Bytes> {
         return Err(anyhow::anyhow!("bulk string lenth longer than buf"));
     }
 
-    let data = buf.split_to(len);
-    if buf.len() < 2 || !buf[0] == b'\r' || buf[1] != b'\n' {
+    let bulk_str = buf.split_to(len);
+    if buf.len() < 2 || !buf.starts_with(CRLF) {
         return Err(anyhow::anyhow!("missing bulk string CRLF"));
     }
     buf.advance(2);
-    return Ok(data.freeze());
+    return Ok(bulk_str.freeze());
 }
 
 fn parse_to_next_crlf(buf: &mut BytesMut) -> Result<Bytes> {
@@ -166,9 +145,83 @@ fn parse_to_next_crlf(buf: &mut BytesMut) -> Result<Bytes> {
     return Err(anyhow::anyhow!("No CRLF found"));
 }
 
+fn parse_array(buf: &mut BytesMut) -> Result<Arg> {
+    if buf.is_empty() || buf[0] != b'*' {
+        return Err(anyhow::anyhow!("No array prefix found"));
+    }
+
+    buf.advance(1);
+    let len_buf = parse_to_next_crlf(buf)?;
+    let len_str = std::str::from_utf8(len_buf.chunk())?;
+    let len = len_str.parse::<usize>()?;
+
+    let mut args: Vec<Arg> = Vec::with_capacity(len);
+
+    for _ in 0..len {
+        let arg = parse_arg(buf)?;
+        args.push(arg);
+    }
+
+    return Ok(Arg::Array(args));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_array() {
+        let set = Arg::Bytes(Bytes::from("SET"));
+        let get = Arg::Bytes(Bytes::from("GET"));
+        let ping = Arg::Bytes(Bytes::from("PING"));
+        let key = Arg::Bytes(Bytes::from("mykey"));
+        let val = Arg::Bytes(Bytes::from("myvalue"));
+        let cases = [
+            ("*1\r\n$3\r\nSET\r\n", vec![set.clone()]),
+            ("*1\r\n$4\r\nPING\r\n", vec![ping]),
+            (
+                "*2\r\n$3\r\nGET\r\n$5\r\nmykey\r\n",
+                vec![get.clone(), key.clone()],
+            ),
+            (
+                "*3\r\n$3\r\nSET\r\n$5\r\nmykey\r\n$7\r\nmyvalue\r\n",
+                vec![set.clone(), key.clone(), val],
+            ),
+        ];
+        for (input, expected) in cases {
+            let arr = Arg::Array(expected);
+            let out = parse_array(&mut BytesMut::from(input));
+            assert_eq!(out.unwrap(), arr);
+        }
+    }
+
+    #[test]
+    fn test_parse_arg() {
+        let cases = [
+            ("$2\r\nOK\r\n", Arg::Bytes(Bytes::from("OK"))),
+            (":+12\r\n", Arg::Int(12)),
+            ("+OK\r\n", Arg::String("OK".into())),
+            (
+                "*1\r\n$3\r\nSET\r\n",
+                Arg::Array(vec![Arg::Bytes(Bytes::from("SET"))]),
+            ),
+        ];
+        for (input, expected) in cases {
+            let mut buf = BytesMut::from(input);
+            let arg = parse_arg(&mut buf).unwrap();
+            assert_eq!(arg, expected);
+            assert!(buf.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_parse_arg_errors() {
+        let cases = ["", "$", "A", "!"];
+        for input in cases {
+            let mut buf = BytesMut::from(input);
+            assert!(parse_arg(&mut buf).is_err());
+        }
+    }
 
     #[test]
     fn test_parse_bulk_string() {
