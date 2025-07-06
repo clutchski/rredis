@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow};
-use bytes::{Buf, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut, buf};
 use log;
 use std::io::{BufRead, BufReader, Read};
 
@@ -91,7 +91,8 @@ pub struct Command {
     pub args: Vec<String>,
 }
 
-// Parses a redis simple string (e.g. +FOOBAR\r\n)
+// Parses the next redis simple string (e.g. +FOOBAR\r\n) in the buffer
+// and advance buf's cursor to the next valid position.
 pub fn parse_simple_string(buf: &mut BytesMut) -> Result<String> {
     if buf.is_empty() || buf[0] != b'+' {
         return Err(anyhow::anyhow!("Invalid simple string format"));
@@ -110,7 +111,8 @@ pub fn parse_simple_string(buf: &mut BytesMut) -> Result<String> {
     Err(anyhow::anyhow!("Incomplete simple string"))
 }
 
-// Parses a redis integer (e.g. ":-123\r\n")
+// Parses a redis integer (e.g. ":-123\r\n") from buf and advance
+// buf's cursor to the next valid position.
 pub fn parse_integer(buf: &mut BytesMut) -> Result<i64> {
     if buf.len() < 4 || buf[0] != b':' {
         return Err(anyhow::anyhow!("Invalid integer prefix"));
@@ -128,9 +130,91 @@ pub fn parse_integer(buf: &mut BytesMut) -> Result<i64> {
     return Err(anyhow::anyhow!("Invalid integer input"));
 }
 
+pub fn parse_bulk_string(buf: &mut BytesMut) -> Result<Bytes> {
+    // $<length>\r\n<content>\r\n
+    if buf.is_empty() || buf[0] != b'$' {
+        return Err(anyhow::anyhow!("No bulk string code"));
+    }
+    buf.advance(1);
+    let len_buf = parse_to_next_crlf(buf)?;
+    let len_str = std::str::from_utf8(len_buf.chunk())?;
+    let len = len_str.parse::<usize>()?;
+
+    if len > buf.len() - 2 {
+        return Err(anyhow::anyhow!("bulk string lenth longer than buf"));
+    }
+
+    let data = buf.split_to(len);
+    if buf.len() < 2 || !buf[0] == b'\r' || buf[1] != b'\n' {
+        return Err(anyhow::anyhow!("missing bulk string CRLF"));
+    }
+    buf.advance(2);
+    return Ok(data.freeze());
+}
+
+fn parse_to_next_crlf(buf: &mut BytesMut) -> Result<Bytes> {
+    if buf.len() < 2 {
+        return Err(anyhow::anyhow!("buf too short for CRLF"));
+    }
+    for i in 0..buf.len() - 1 {
+        if buf[i..].starts_with(CRLF) {
+            let slice = buf.split_to(i);
+            buf.advance(2); // Skip the CRLF
+            return Ok(slice.freeze());
+        }
+    }
+    return Err(anyhow::anyhow!("No CRLF found"));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_bulk_string() {
+        // $<length>\r\n<content>\r\n
+        let cases = [
+            ("$0\r\n\r\n", ""),
+            ("$1\r\nM\r\n", "M"),
+            ("$2\r\nOK\r\n", "OK"),
+            ("$4\r\nPING\r\n", "PING"),
+            ("$2\r\nñ\r\n", "ñ"), // <== 2-byte UTF-8 character
+        ];
+        for (input, expected) in cases {
+            let mut buf = BytesMut::from(input);
+            assert_eq!(parse_bulk_string(&mut buf).unwrap(), expected);
+            assert!(buf.is_empty());
+        }
+
+        let multi = "$0\r\n\r\n$1\r\n1\r\n$2\r\n10\r\n";
+        let mut buf = BytesMut::from(multi);
+        assert_eq!(parse_bulk_string(&mut buf).unwrap(), "");
+        assert_eq!(parse_bulk_string(&mut buf).unwrap(), "1");
+        assert_eq!(parse_bulk_string(&mut buf).unwrap(), "10");
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_parse_bulk_string_errs() {
+        // $<length>\r\n<content>\r\n
+        let cases = [
+            "0",
+            "$",
+            "$\r\n",
+            "$\r\n\r",
+            "$\r\n\r\n",
+            "$0\r\na\r\n",
+            "$1\r\nab\r\n",
+            "$2\r\na\r\n",
+            "$1\r\n\r\n",
+            "$1\r\nñ\r\n", // unicode
+            "$3\r\nñ\r\n",
+        ];
+        for input in cases {
+            let mut buf = BytesMut::from(input);
+            assert!(parse_bulk_string(&mut buf).is_err());
+        }
+    }
 
     #[test]
     fn test_parse_integer_ok() {
@@ -149,8 +233,15 @@ mod tests {
             assert_eq!(result, *expected, "input: {:?}", input);
             assert!(buf.is_empty());
         }
+    }
 
+    #[test]
+    fn test_parse_multiple_integers() {
         let mut double = BytesMut::from(":1\r\n:10\r\n:100\r\n");
+        assert_eq!(parse_integer(&mut double).unwrap(), 1);
+        assert_eq!(parse_integer(&mut double).unwrap(), 10);
+        assert_eq!(parse_integer(&mut double).unwrap(), 100);
+        assert!(double.is_empty());
     }
 
     #[test]
