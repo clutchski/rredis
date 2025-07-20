@@ -37,5 +37,3 @@ watch:
 
 watch-test:
 	watchexec -e rs -c -r -- cargo test
-
-
