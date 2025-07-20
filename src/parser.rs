@@ -21,7 +21,7 @@ impl<R: Read> Parser<R> {
     pub fn parse(&mut self) -> Result<Option<Arg>> {
         self.read()?; // fill our buffer until EOF
 
-        let args = parse_array(&mut self.buf);
+        let _args = parse_array(&mut self.buf);
 
         return Err(anyhow::anyhow!("can't parse empty arg"));
     }

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use log;
 
-use std::io::{BufRead, BufReader, Read};
+use std::io::BufReader;
 use std::net::{TcpListener, TcpStream};
 
 use crate::parser::Parser;
