@@ -1,17 +1,17 @@
 use anyhow::{Result, anyhow};
-use bytes::{Buf, BufMut, Bytes, BytesMut, buf};
-use std::io::{BufRead, BufReader, Read};
+use bytes::{Buf, Bytes, BytesMut};
+use std::io::{BufReader, Read};
 
 pub const CRLF: &[u8] = b"\r\n";
 
 pub struct Parser<R> {
     reader: BufReader<R>,
-    buf: Vec<u8>,
+    buf: BytesMut,
 }
 
 impl<R: Read> Parser<R> {
     pub fn new(reader: BufReader<R>) -> Self {
-        let buf: Vec<u8> = Vec::with_capacity(1024); // reusable byte buffer
+        let buf = BytesMut::with_capacity(1024);
         return Self {
             reader: reader,
             buf: buf, // reusable byte buffer
@@ -19,9 +19,35 @@ impl<R: Read> Parser<R> {
     }
 
     pub fn parse(&mut self) -> Result<Option<Arg>> {
-        self.buf.clear();
+        self.read()?; // fill our buffer until EOF
+
+        let args = parse_array(&mut self.buf);
 
         return Err(anyhow::anyhow!("can't parse empty arg"));
+    }
+
+    fn read(&mut self) -> Result<()> {
+        self.buf.clear();
+        loop {
+            // Ensure space to read into
+            self.buf.reserve(1024);
+
+            // Reserve space for reading
+            let buf_len = self.buf.len();
+            self.buf.resize(buf_len + 1024, 0);
+
+            // Read into the buffer
+            let n = self.reader.read(&mut self.buf[buf_len..])?;
+            if n == 0 {
+                // No data read, remove the reserved space
+                self.buf.truncate(buf_len);
+                break; // EOF reached
+            }
+
+            // Adjust buffer size to actual data read
+            self.buf.truncate(buf_len + n);
+        }
+        Ok(())
     }
 }
 

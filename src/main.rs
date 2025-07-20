@@ -1,8 +1,5 @@
-mod parser;
-mod server;
-
 use log;
-use server::Server;
+use rredis::server::Server;
 
 fn main() {
     env_logger::init();
