@@ -2,7 +2,7 @@ use anyhow::Result;
 use log;
 
 use std::io::BufReader;
-use std::net::{TcpListener, TcpStream};
+use std::net::{Shutdown, TcpListener, TcpStream};
 
 use crate::parser::Parser;
 
@@ -13,46 +13,46 @@ pub struct Server {
 
 impl Server {
     pub fn new(host: &str, port: u16) -> Result<Self, std::io::Error> {
-        let addr = format!("{}:{}", host, port);
+        let addr = format!("{host}:{port}");
         let listener = TcpListener::bind(&addr)?;
 
-        return Ok(Self {
-            addr: addr,
-            listener: listener,
-        });
+        log::info!("rredis running on {addr}");
+
+        Ok(Self { addr, listener })
     }
 
     pub fn run(&self) {
         log::info!("Starting server {}", self.addr);
         for stream in self.listener.incoming() {
             match stream {
-                Ok(stream) => {
-                    if let Err(e) = self.handle_stream(stream) {
-                        log::error!("stream handling failed: {}", e);
-                        break;
+                Ok(mut stream) => {
+                    let result = self.handle_stream(&mut stream);
+                    if result.is_err() {
+                        log::error!("err running command {result:?}");
+                        let _ = stream.shutdown(Shutdown::Both);
                     }
+                    break;
                 }
                 Err(e) => {
-                    log::error!("error connecting {}", e);
+                    log::error!("error connecting {e}");
                 }
             }
         }
         log::debug!("finished run loop");
     }
 
-    fn handle_stream(&self, stream: TcpStream) -> Result<()> {
+    fn handle_stream(&self, stream: &mut TcpStream) -> Result<()> {
         let peer_addr = stream.peer_addr().unwrap();
-        log::info!("incoming connection {}", peer_addr);
+        log::info!("incoming connection {peer_addr}");
 
-        let reader = BufReader::new(&stream);
-        //let mut writer = &stream;
+        let reader = BufReader::new(stream);
 
         let mut parser = Parser::new(reader);
         loop {
             let cmd = parser.parse()?;
             match cmd {
                 Some(cmd) => {
-                    log::info!("received command: {:?}", cmd);
+                    log::info!("received command: {cmd:?}");
                 }
                 None => {
                     break;

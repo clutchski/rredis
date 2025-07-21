@@ -12,42 +12,38 @@ pub struct Parser<R> {
 impl<R: Read> Parser<R> {
     pub fn new(reader: BufReader<R>) -> Self {
         let buf = BytesMut::with_capacity(1024);
-        return Self {
-            reader: reader,
-            buf: buf, // reusable byte buffer
-        };
+        Self {
+            reader,
+            buf, // reusable byte buffer
+        }
     }
 
     pub fn parse(&mut self) -> Result<Option<Arg>> {
-        self.read()?; // fill our buffer until EOF
+        let n = self.read()?; // fill our buffer until EOF
+        if n == 0 {
+            return Ok(None);
+        }
 
-        let _args = parse_array(&mut self.buf);
-
-        return Err(anyhow::anyhow!("can't parse empty arg"));
+        let cmd_array = parse_array(&mut self.buf)?;
+        Ok(Some(cmd_array))
     }
 
-    fn read(&mut self) -> Result<()> {
+    fn read(&mut self) -> Result<usize> {
+        // FIXME[matt] I don't know if this is correct
         self.buf.clear();
-        loop {
-            // Ensure space to read into
-            self.buf.reserve(1024);
+        // Ensure space to read into
+        self.buf.reserve(1024);
 
-            // Reserve space for reading
-            let buf_len = self.buf.len();
-            self.buf.resize(buf_len + 1024, 0);
+        // Reserve space for reading
+        let buf_len = self.buf.len();
+        self.buf.resize(buf_len + 1024, 0);
 
-            // Read into the buffer
-            let n = self.reader.read(&mut self.buf[buf_len..])?;
-            if n == 0 {
-                // No data read, remove the reserved space
-                self.buf.truncate(buf_len);
-                break; // EOF reached
-            }
-
-            // Adjust buffer size to actual data read
-            self.buf.truncate(buf_len + n);
-        }
-        Ok(())
+        // Read into the buffer
+        log::info!("starting read");
+        let n = self.reader.read(&mut self.buf[buf_len..])?;
+        log::info!("Read {n} bytes");
+        self.buf.truncate(buf_len + n);
+        Ok(n)
     }
 }
 
@@ -81,18 +77,18 @@ pub fn parse_arg(buf: &mut BytesMut) -> Result<Arg> {
     match peek {
         b':' => {
             let i = parse_integer(buf)?;
-            return Ok(Arg::Int(i));
+            Ok(Arg::Int(i))
         }
         b'+' => {
             let s = parse_simple_string(buf)?;
-            return Ok(Arg::String(s));
+            Ok(Arg::String(s))
         }
         b'$' => {
             let b = parse_bulk_string(buf)?;
-            return Ok(Arg::Bytes(b));
+            Ok(Arg::Bytes(b))
         }
-        b'*' => return Ok(parse_array(buf)?),
-        _ => return Err(anyhow!("Invalid arg prefix")),
+        b'*' => parse_array(buf),
+        _ => Err(anyhow!("Invalid arg prefix")),
     }
 }
 
@@ -132,7 +128,7 @@ pub fn parse_integer(buf: &mut BytesMut) -> Result<i64> {
         }
     }
 
-    return Err(anyhow::anyhow!("Invalid integer input"));
+    Err(anyhow::anyhow!("Invalid integer input"))
 }
 
 pub fn parse_bulk_string(buf: &mut BytesMut) -> Result<Bytes> {
@@ -154,7 +150,7 @@ pub fn parse_bulk_string(buf: &mut BytesMut) -> Result<Bytes> {
         return Err(anyhow::anyhow!("missing bulk string CRLF"));
     }
     buf.advance(2);
-    return Ok(bulk_str.freeze());
+    Ok(bulk_str.freeze())
 }
 
 fn parse_to_next_crlf(buf: &mut BytesMut) -> Result<Bytes> {
@@ -168,7 +164,7 @@ fn parse_to_next_crlf(buf: &mut BytesMut) -> Result<Bytes> {
             return Ok(slice.freeze());
         }
     }
-    return Err(anyhow::anyhow!("No CRLF found"));
+    Err(anyhow::anyhow!("No CRLF found"))
 }
 
 fn parse_array(buf: &mut BytesMut) -> Result<Arg> {
@@ -188,7 +184,7 @@ fn parse_array(buf: &mut BytesMut) -> Result<Arg> {
         args.push(arg);
     }
 
-    return Ok(Arg::Array(args));
+    Ok(Arg::Array(args))
 }
 
 #[cfg(test)]
@@ -309,7 +305,7 @@ mod tests {
         for (input, expected) in &cases {
             let mut buf = BytesMut::from(*input);
             let result = parse_integer(&mut buf).unwrap();
-            assert_eq!(result, *expected, "input: {:?}", input);
+            assert_eq!(result, *expected, "input: {input:?}");
             assert!(buf.is_empty());
         }
     }

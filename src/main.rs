@@ -1,4 +1,3 @@
-use log;
 use rredis::server::Server;
 
 fn main() {
