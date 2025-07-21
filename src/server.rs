@@ -1,9 +1,11 @@
+use anyhow::Result;
 use log;
 
-use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpListener, TcpStream};
+use std::io::BufReader;
+use std::net::{Shutdown, TcpListener, TcpStream};
 
-#[derive(Debug)]
+use crate::parser::Parser;
+
 pub struct Server {
     pub addr: String,
     pub listener: TcpListener,
@@ -11,47 +13,52 @@ pub struct Server {
 
 impl Server {
     pub fn new(host: &str, port: u16) -> Result<Self, std::io::Error> {
-        let addr = format!("{}:{}", host, port);
+        let addr = format!("{host}:{port}");
         let listener = TcpListener::bind(&addr)?;
 
-        return Ok(Self {
-            addr: addr,
-            listener: listener,
-        });
+        log::info!("rredis running on {addr}");
+
+        Ok(Self { addr, listener })
     }
 
     pub fn run(&self) {
         log::info!("Starting server {}", self.addr);
         for stream in self.listener.incoming() {
             match stream {
-                Ok(stream) => self.handle_stream(stream),
+                Ok(mut stream) => {
+                    let result = self.handle_stream(&mut stream);
+                    if result.is_err() {
+                        log::error!("err running command {result:?}");
+                        let _ = stream.shutdown(Shutdown::Both);
+                    }
+                    break;
+                }
                 Err(e) => {
-                    log::error!("error connecting {}", e)
+                    log::error!("error connecting {e}");
                 }
             }
         }
+        log::debug!("finished run loop");
     }
 
-    fn handle_stream(&self, stream: TcpStream) {
+    fn handle_stream(&self, stream: &mut TcpStream) -> Result<()> {
         let peer_addr = stream.peer_addr().unwrap();
-        log::info!("incoming connection {}", peer_addr);
+        log::info!("incoming connection {peer_addr}");
 
-        let mut reader = BufReader::new(&stream);
-        let mut writer = &stream;
+        let reader = BufReader::new(stream);
 
-        let mut line = String::new();
-        while let Ok(bytes_read) = reader.read_line(&mut line) {
-            if bytes_read == 0 {
-                break; // connection closed
+        let mut parser = Parser::new(reader);
+        loop {
+            let cmd = parser.parse()?;
+            match cmd {
+                Some(cmd) => {
+                    log::info!("received command: {cmd:?}");
+                }
+                None => {
+                    break;
+                }
             }
-
-            print!("Received: {}", line); // print on server
-            if let Err(e) = writer.write(line.as_bytes()) {
-                eprintln!("Failed to write: {}", e);
-                break;
-            }
-
-            line.clear(); // reset buffer for next line
         }
+        Ok(())
     }
 }

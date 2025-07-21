@@ -1,10 +1,9 @@
-mod server;
-
-use server::Server;
+use rredis::server::Server;
 
 fn main() {
     env_logger::init();
 
-    let s = Server::new("localhost", 6666).unwrap();
+    let s = Server::new("127.0.0.1", 6666).unwrap();
     s.run();
+    log::debug!("bye bye");
 }
